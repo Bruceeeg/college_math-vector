@@ -37,6 +37,10 @@ test("case study matches the hand calculation", () => {
   assert.equal(model.tiltAgrees, true);
   assert.equal(model.isCaseStudy, true);
 
+  assert.deepEqual(
+    model.steps.map((step) => step.focus),
+    ["panel", "edges", "normal", "incidence"],
+  );
   const text = model.steps.flatMap((step) => step.lines).join("\n");
   assert.match(text, /24\/25/);
   assert.match(text, /⟨0, −9, 12⟩/);

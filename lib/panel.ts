@@ -11,9 +11,21 @@ export type PanelInput = {
 
 export type PresetId = "case" | "flat" | "behind";
 
+export type StepFocus = "panel" | "edges" | "normal" | "incidence";
+
+export type StepDetail = {
+  id: string;
+  title: string;
+  lines: string[];
+  note: string;
+};
+
 export type Step = {
   id: string;
   title: string;
+  summary: string[];
+  focus: StepFocus;
+  details: StepDetail[];
   lines: string[];
   note: string;
 };
@@ -63,7 +75,7 @@ export const CASE_STUDY: PanelInput = {
 export const PRESETS: Record<PresetId, { label: string; detail: string; input: PanelInput }> = {
   case: {
     label: "Case study",
-    detail: "3 by 5 m",
+    detail: "3 × 5 m",
     input: CASE_STUDY,
   },
   flat: {
@@ -279,6 +291,27 @@ function buildFormula(model: ModelCore): string[] {
   ];
 }
 
+function stepSummaries(model: ModelCore): Record<StepFocus, string[]> {
+  const incidence =
+    model.cosTheta === null
+      ? ["cos θ is undefined because the sun vector has length 0."]
+      : model.isCaseStudy
+        ? ["cos θ = (n · s) / (|n| |s|)", "= 72 / (15 × 5) = 24/25"]
+        : [
+            "cos θ = (n · s) / (|n| |s|)",
+            `= ${formatQuantity(model.dot)} / (${formatQuantity(model.nMag)} × ${formatQuantity(model.sMag)}) = ${formatQuantity(model.cosTheta)}`,
+          ];
+  return {
+    panel: [
+      `A = ${formatVec(model.a)},   B = ${formatVec(model.b)}`,
+      `D = ${formatVec(model.d)},   C = ${formatVec(model.c)}`,
+    ],
+    edges: [`u = B − A = ${formatVec(model.u)}`, `v = D − A = ${formatVec(model.v)}`],
+    normal: ["n = u × v", `= ${formatVec(model.n)}`],
+    incidence,
+  };
+}
+
 function buildSteps(model: ModelCore): Step[] {
   const { input, u, v, n, s } = model;
   const unitLine = model.isCaseStudy
@@ -319,7 +352,7 @@ function buildSteps(model: ModelCore): Step[] {
       ]
     : [];
 
-  return [
+  const details: StepDetail[] = [
     {
       id: "corners",
       title: "Corners of the glass",
@@ -422,4 +455,30 @@ function buildSteps(model: ModelCore): Step[] {
         ]
       : []),
   ];
+
+  const summaries = stepSummaries(model);
+  const groups: { id: string; title: string; focus: StepFocus; ids: string[] }[] = [
+    { id: "panel", title: "Define the panel", focus: "panel", ids: ["corners"] },
+    { id: "edges", title: "Calculate edge vectors", focus: "edges", ids: ["edges", "right-angle"] },
+    { id: "normal", title: "Calculate surface normal", focus: "normal", ids: ["cross", "area", "unit"] },
+    {
+      id: "incidence",
+      title: "Calculate sunlight incidence",
+      focus: "incidence",
+      ids: ["sun", "angle", "flat", "tilt-check"],
+    },
+  ];
+
+  return groups.map((group) => {
+    const parts = details.filter((detail) => group.ids.includes(detail.id));
+    return {
+      id: group.id,
+      title: group.title,
+      focus: group.focus,
+      summary: summaries[group.focus],
+      details: parts,
+      lines: parts.flatMap((part) => part.lines),
+      note: parts.map((part) => part.note).join(" "),
+    };
+  });
 }

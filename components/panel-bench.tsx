@@ -2,10 +2,13 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
+import { MathText } from "@/components/math-text";
 import { RoofSlice, SunComponents } from "@/components/diagrams";
 import { ParameterControl } from "@/components/parameter-control";
+import type { SceneVisibility } from "@/components/panel-scene";
+import { VECTOR_COLOR } from "@/lib/colors";
 import {
   CASE_STUDY,
   formatQuantity,
@@ -14,246 +17,421 @@ import {
   solvePanel,
   type PanelInput,
   type PresetId,
+  type StepFocus,
 } from "@/lib/panel";
 
-const PanelScene = dynamic(
-  () => import("@/components/panel-scene").then((mod) => mod.PanelScene),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="grid h-full min-h-[280px] place-items-center text-sm text-quiet">Loading the roof…</div>
-    ),
-  },
-);
+const PanelScene = dynamic(() => import("@/components/panel-scene").then((mod) => mod.PanelScene), {
+  ssr: false,
+  loading: () => <div className="grid h-full min-h-[280px] place-items-center text-sm text-quiet">Loading the roof…</div>,
+});
 
-const FIELDS: {
+type Field = {
   key: keyof PanelInput;
   label: string;
-  symbol: string;
+  hint: string;
   unit: string;
   min: number;
   max: number;
-}[] = [
-  { key: "east", label: "eaves length", symbol: "east", unit: "m", min: 1, max: 6 },
-  { key: "north", label: "north run", symbol: "north", unit: "m", min: 1, max: 8 },
-  { key: "rise", label: "rise", symbol: "rise", unit: "m", min: -4, max: 6 },
-  { key: "sunEast", label: "sun east", symbol: "sE", unit: "m", min: -6, max: 6 },
-  { key: "sunNorth", label: "sun north", symbol: "sN", unit: "m", min: -6, max: 6 },
-  { key: "sunUp", label: "sun up", symbol: "sU", unit: "m", min: 0, max: 8 },
+  step: number;
+};
+
+const GEOMETRY: Field[] = [
+  { key: "east", label: "East eaves", hint: "Width along east", unit: "m", min: 1, max: 6, step: 1 },
+  { key: "north", label: "North run", hint: "Horizontal depth", unit: "m", min: 1, max: 8, step: 1 },
+  { key: "rise", label: "Rise", hint: "Vertical height", unit: "m", min: -4, max: 6, step: 1 },
 ];
 
-const VECTOR_TOGGLES = [
-  { id: "u", label: "u eaves", color: "#1e3a5f" },
-  { id: "v", label: "v slope", color: "#0f766e" },
-  { id: "n", label: "n normal", color: "#a16207" },
-  { id: "s", label: "s sun", color: "#c2410c" },
-] as const;
+const SUN: Field[] = [
+  { key: "sunEast", label: "East component", hint: "Toward east is positive", unit: "m", min: -6, max: 6, step: 1 },
+  { key: "sunNorth", label: "North component", hint: "Toward north is positive", unit: "m", min: -6, max: 6, step: 1 },
+  { key: "sunUp", label: "Up component", hint: "Toward the sky is positive", unit: "m", min: 0, max: 8, step: 1 },
+];
+
+const LAYERS: { id: keyof SceneVisibility; label: string; color: string }[] = [
+  { id: "vertices", label: "Vertices", color: VECTOR_COLOR.vertex },
+  { id: "edges", label: "u · v  edges", color: VECTOR_COLOR.u },
+  { id: "normal", label: "n  normal", color: VECTOR_COLOR.n },
+  { id: "sun", label: "s  sun", color: VECTOR_COLOR.s },
+  { id: "axes", label: "Axes", color: VECTOR_COLOR.axis },
+];
+
+const FOCUS_NOTE: Record<StepFocus, string> = {
+  panel: "Highlighting the four corners",
+  edges: "Highlighting edge vectors u and v",
+  normal: "Highlighting the surface normal n",
+  incidence: "Highlighting the angle between n and s",
+};
+
+const STEP_COLOR: Record<StepFocus, string> = {
+  panel: VECTOR_COLOR.vertex,
+  edges: VECTOR_COLOR.u,
+  normal: VECTOR_COLOR.n,
+  incidence: VECTOR_COLOR.s,
+};
 
 export function PanelBench() {
   const [input, setInput] = useState<PanelInput>(CASE_STUDY);
-  const [show, setShow] = useState({ u: true, v: true, n: true, s: true });
+  const [baseline, setBaseline] = useState<PresetId>("case");
+  const [show, setShow] = useState<SceneVisibility>({
+    vertices: true,
+    edges: true,
+    normal: true,
+    sun: true,
+    axes: true,
+  });
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"model" | "parameters" | "steps">("model");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rangesPinned, setRangesPinned] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
   const model = useMemo(() => solvePanel(input), [input]);
   const preset = matchingPreset(input);
-  const cosText =
-    model.cosTheta === null ? "—" : model.isCaseStudy ? "24/25" : formatQuantity(model.cosTheta);
-  const stats = [
-    { label: "Area |n|", value: formatQuantity(model.area), unit: "m²" },
-    { label: "n · s", value: formatQuantity(model.dot), unit: "" },
-    { label: "cos θ", value: cosText, unit: "" },
+  const emphasis = model.steps.find((step) => step.id === openId)?.focus ?? null;
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!settingsRef.current?.contains(event.target as Node)) setSettingsOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [settingsOpen]);
+
+  const front =
+    model.frontShare === null
+      ? { value: "—", hint: "The sun vector has no direction", tone: "text-quiet" }
+      : model.frontShare <= 0
+        ? {
+            value: "0",
+            hint: model.cosTheta !== null && model.cosTheta < -0.02 ? "Sun is behind the glass" : "Sun is grazing the glass",
+            tone: model.cosTheta !== null && model.cosTheta < -0.02 ? "text-red-700" : "text-quiet",
+          }
+        : {
+            value: model.isCaseStudy ? "24/25" : formatQuantity(model.frontShare),
+            hint: "Reaches the front of the glass",
+            tone: "text-emerald-700",
+          };
+
+  const metrics = [
+    { label: "Panel area", value: formatQuantity(model.area), unit: "m²", hint: "Area of the rectangle", tone: "text-quiet" },
+    {
+      label: "Incidence angle",
+      value: model.thetaDeg === null ? "—" : formatQuantity(model.thetaDeg),
+      unit: model.thetaDeg === null ? "" : "°",
+      hint: "Between the normal and the sun",
+      tone: "text-quiet",
+    },
+    { label: "Front-facing sunlight", value: front.value, unit: "", hint: front.hint, tone: front.tone },
+    {
+      label: "Relative performance",
+      value: model.gain === null ? "—" : formatQuantity(model.gain),
+      unit: model.gain === null ? "" : "×",
+      hint: model.gain === null ? "Not comparable with a flat roof" : "Compared with a flat roof",
+      tone: "text-quiet",
+    },
   ];
 
+  const applyPreset = (id: PresetId) => {
+    setBaseline(id);
+    setInput(PRESETS[id].input);
+  };
+
+  const openStep = (id: string) => {
+    const closing = openId === id;
+    setOpenId(closing ? null : id);
+    if (closing) return;
+    const step = model.steps.find((item) => item.id === id);
+    if (!step) return;
+    setShow((current) => ({
+      ...current,
+      vertices: step.focus === "panel" ? true : current.vertices,
+      edges: step.focus === "edges" ? true : current.edges,
+      normal: step.focus === "normal" || step.focus === "incidence" ? true : current.normal,
+      sun: step.focus === "incidence" ? true : current.sun,
+    }));
+  };
+
   return (
-    <div className="lab-shell bg-paper text-ink">
-      <header className="lab-commandbar border border-line bg-surface">
-        <div className="lab-title min-w-0">
-          <p className="truncate text-base font-medium text-ink">
-            <Link
-              href="/"
-              className="mr-2 text-[11px] font-normal text-quiet hover:text-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
+    <div className="lab-shell text-ink">
+      <header className="lab-header">
+        <div className="lab-header-row">
+          <div className="min-w-0">
+            <p className="text-[11px] text-quiet">
+              <Link
+                href="/"
+                className="hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
+              >
+                Overview
+              </Link>
+            </p>
+            <h1 className="truncate text-[15px] font-medium leading-6 text-ink">Solar Panel Geometry</h1>
+          </div>
+          <div className="lab-header-actions">
+            <label className="flex min-w-0 items-center gap-2 text-[13px] text-quiet">
+              <span className="shrink-0">Scenario</span>
+              <select
+                className="lab-select"
+                aria-label="Scenario"
+                value={preset ?? "custom"}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (next === "case" || next === "flat" || next === "behind") applyPreset(next);
+                }}
+              >
+                {(Object.keys(PRESETS) as PresetId[]).map((id) => (
+                  <option key={id} value={id}>
+                    {PRESETS[id].label} · {PRESETS[id].detail}
+                  </option>
+                ))}
+                {preset === null ? <option value="custom">Custom</option> : null}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="lab-text-button"
+              onClick={() => setInput(PRESETS[baseline].input)}
             >
-              Overview
-            </Link>
-            Solar panel
-          </p>
-          <p className="font-mono text-[10px] text-quiet">x east · y north · z up</p>
+              Reset
+            </button>
+            <div className="relative" ref={settingsRef}>
+              <button
+                type="button"
+                className="lab-text-button"
+                aria-expanded={settingsOpen}
+                aria-controls="lab-settings"
+                onClick={() => setSettingsOpen((open) => !open)}
+              >
+                Settings
+              </button>
+              {settingsOpen ? (
+                <div id="lab-settings" className="lab-popover">
+                  <p className="text-[13px] leading-5 text-ink">x east, y north, z up. Lengths are metres.</p>
+                  <p className="mt-2 text-[12px] leading-5 text-quiet">
+                    The sun components are a direction. A longer arrow is the same sun.
+                  </p>
+                  <label className="mt-3 flex items-center gap-2 text-[13px] text-ink">
+                    <input
+                      type="checkbox"
+                      checked={rangesPinned}
+                      onChange={(event) => setRangesPinned(event.target.checked)}
+                    />
+                    Keep ranges and steps visible
+                  </label>
+                  <Link href="/instruction" className="mt-3 inline-block text-[13px] text-navy hover:underline">
+                    Written instruction
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
-        <div className="lab-stats grid min-w-0 grid-cols-3">
-          {stats.map((item) => (
-            <div key={item.label} className="min-w-0 border-l border-line pl-3">
-              <p className="text-[10px] text-quiet">{item.label}</p>
-              <p className="truncate font-mono text-base text-ink tabular-nums">
-                {item.value} {item.unit ? <span className="text-[10px] text-quiet">{item.unit}</span> : null}
-              </p>
+        <dl className="lab-metrics">
+          {metrics.map((item) => (
+            <div key={item.label} className="min-w-0">
+              <dt className="text-[11px] text-quiet">{item.label}</dt>
+              <dd className="mt-1 truncate font-mono text-[22px] font-medium leading-none tracking-tight text-ink tabular-nums">
+                {item.value}
+                {item.unit ? <span className="ml-1 font-sans text-[12px] font-normal text-quiet">{item.unit}</span> : null}
+              </dd>
+              <p className={`mt-1 text-[11px] leading-4 ${item.tone}`}>{item.hint}</p>
             </div>
           ))}
-        </div>
-        <p
-          role="status"
-          className={`lab-status min-w-0 text-xs ${
-            model.statusKind === "ok" ? "text-emerald-700" : model.statusKind === "warn" ? "text-red-700" : "text-quiet"
-          }`}
-          title={model.status}
-        >
-          {model.status}
-        </p>
-        <div className="lab-actions flex justify-end">
-          <button
-            type="button"
-            onClick={() => setInput(CASE_STUDY)}
-            className="h-8 cursor-pointer bg-navy px-3 text-[13px] font-medium text-white hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
-          >
-            Case study
-          </button>
+        </dl>
+        <div className="lab-switch" role="tablist" aria-label="Workspace">
+          {(
+            [
+              ["model", "Model"],
+              ["parameters", "Parameters"],
+              ["steps", "Calculation"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={mode === id}
+              onClick={() => setMode(id)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </header>
 
-      <main className="lab-workspace">
-        <aside className="lab-parameters border border-line bg-surface">
-          <div className="border-b border-line px-2.5 py-2">
-            <h2 className="text-sm font-medium text-ink">Panel and sun</h2>
-            <p className="mt-0.5 text-[11px] leading-4 text-quiet">
-              The sun components are a direction, not a distance. Metres keep every vector in one unit.
+      <main className="lab-workspace" data-mode={mode}>
+        <aside className="lab-parameters">
+          <section>
+            <p className="text-[11px] font-medium tracking-[0.08em] text-quiet">PANEL GEOMETRY</p>
+            <h2 className="mt-1 text-[15px] font-medium text-ink">Roof dimensions</h2>
+            <p className="mt-1 text-[13px] leading-5 text-quiet">Define the rectangular panel in 3D space.</p>
+            <div className="mt-1">
+              {GEOMETRY.map((field) => (
+                <ParameterControl
+                  key={field.key}
+                  id={field.key}
+                  label={field.label}
+                  hint={field.hint}
+                  unit={field.unit}
+                  value={input[field.key]}
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  showRange={rangesPinned}
+                  onChange={(value) => setInput((current) => ({ ...current, [field.key]: value }))}
+                />
+              ))}
+            </div>
+          </section>
+          <section className="mt-6">
+            <p className="text-[11px] font-medium tracking-[0.08em] text-quiet">SUN DIRECTION</p>
+            <h2 className="mt-1 text-[15px] font-medium text-ink">Direction vector</h2>
+            <p className="mt-1 text-[13px] leading-5 text-quiet">
+              These components point toward the sun. They are not a distance from the roof.
             </p>
-          </div>
-          <div className="grid grid-cols-3 gap-1 px-2 py-2" role="group" aria-label="Examples">
-            {(Object.keys(PRESETS) as PresetId[]).map((id) => {
-              const selected = preset === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => setInput(PRESETS[id].input)}
-                  className={`h-12 cursor-pointer border px-1.5 text-left text-[11px] leading-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy ${
-                    selected ? "border-navy bg-navy text-white" : "border-line bg-surface text-ink hover:border-navy"
-                  }`}
-                >
-                  <span className="block font-medium">{PRESETS[id].label}</span>
-                  <span className={selected ? "text-white/80" : "text-quiet"}>{PRESETS[id].detail}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="space-y-1 px-1.5">
-            {FIELDS.map((field) => (
-              <ParameterControl
-                key={field.key}
-                id={field.key}
-                label={field.label}
-                symbol={field.symbol}
-                unit={field.unit}
-                value={input[field.key]}
-                min={field.min}
-                max={field.max}
-                step={1}
-                onChange={(value) => setInput((current) => ({ ...current, [field.key]: value }))}
-              />
-            ))}
-          </div>
-          <div className="px-2 py-2">
-            <h2 className="text-[13px] font-medium text-ink">Vectors drawn</h2>
-            <div className="mt-1 grid grid-cols-2 gap-1">
-              {VECTOR_TOGGLES.map((item) => {
-                const selected = show[item.id];
+            <div className="mt-1">
+              {SUN.map((field) => (
+                <ParameterControl
+                  key={field.key}
+                  id={field.key}
+                  label={field.label}
+                  hint={field.hint}
+                  unit={field.unit}
+                  value={input[field.key]}
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  showRange={rangesPinned}
+                  onChange={(value) => setInput((current) => ({ ...current, [field.key]: value }))}
+                />
+              ))}
+            </div>
+          </section>
+          <button
+            type="button"
+            className="mt-4 cursor-pointer text-[13px] text-quiet hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy"
+            aria-expanded={rangesPinned}
+            onClick={() => setRangesPinned((pinned) => !pinned)}
+          >
+            Advanced settings {rangesPinned ? "↑" : "↓"}
+          </button>
+        </aside>
+
+        <section className="lab-scene" aria-label="3D visualization">
+          <div className="px-3 pt-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-[15px] font-medium text-ink">3D visualization</h2>
+              <p className="truncate text-[11px] text-quiet">Drag to rotate · Scroll to zoom</p>
+            </div>
+            <p className="mt-1 text-[12px] leading-5 text-quiet" aria-live="polite">
+              {emphasis ? FOCUS_NOTE[emphasis] : "Select a calculation step to highlight it here."}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Shown in the model">
+              {LAYERS.map((layer) => {
+                const selected = show[layer.id];
                 return (
                   <button
-                    key={item.id}
+                    key={layer.id}
                     type="button"
                     aria-pressed={selected}
-                    onClick={() => setShow((current) => ({ ...current, [item.id]: !current[item.id] }))}
-                    className={`h-8 cursor-pointer border px-2 text-left text-[12px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy ${
-                      selected ? "border-navy bg-surface text-ink" : "border-line bg-muted text-quiet"
+                    onClick={() => setShow((current) => ({ ...current, [layer.id]: !current[layer.id] }))}
+                    className={`inline-flex h-7 cursor-pointer items-center gap-1.5 px-2 text-[12px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-navy ${
+                      selected ? "bg-[#f3f6f9] text-ink" : "text-quiet"
                     }`}
                   >
-                    <span className="mr-1.5 inline-block h-2 w-2" style={{ background: item.color }} />
-                    {item.label}
+                    <span className="inline-flex gap-0.5" aria-hidden="true">
+                      <span className="inline-block h-1.5 w-1.5" style={{ background: layer.color }} />
+                      {layer.id === "edges" ? (
+                        <span className="inline-block h-1.5 w-1.5" style={{ background: VECTOR_COLOR.v }} />
+                      ) : null}
+                    </span>
+                    {layer.label}
                   </button>
                 );
               })}
             </div>
           </div>
-          <section className="mx-2 border-t border-line pt-2 pb-3">
-            <h2 className="text-[13px] font-medium text-ink">Current values</h2>
-            <div className="mt-1 space-y-1 font-mono text-[11px] leading-5">
-              {model.formula.map((line) => (
-                <p key={line} className="m-0 break-words text-ink">
-                  {line}
-                </p>
-              ))}
-            </div>
-          </section>
-        </aside>
-
-        <section className="lab-scene min-h-0 border border-line bg-surface">
-          <div className="flex h-8 items-center justify-between gap-3 border-b border-line px-2.5">
-            <h2 className="text-xs font-medium text-ink">Roof frame</h2>
-            <p className="truncate font-mono text-[10px] text-quiet">Drag to turn. n and s arrows are scaled to fit.</p>
-          </div>
           <div className="lab-scene-viewport relative min-h-[280px] flex-1">
-            <div className="absolute inset-0 h-full w-full">
-              <PanelScene model={model} show={show} />
+            <div className="absolute inset-0">
+              <PanelScene model={model} show={show} emphasis={emphasis} />
             </div>
           </div>
-          <dl className="grid h-12 grid-cols-4 border-t border-line font-mono text-[11px] tabular-nums">
-            <Readout label="|n|" value={formatQuantity(model.nMag)} />
-            <Readout label="θ" value={model.thetaDeg === null ? "—" : formatQuantity(model.thetaDeg)} unit="°" />
-            <Readout label="front share" value={model.frontShare === null ? "—" : formatQuantity(model.frontShare)} />
-            <Readout
-              label="vs flat"
-              value={model.gain === null ? "—" : formatQuantity(model.gain)}
-              unit={model.gain === null ? "" : "×"}
-            />
-          </dl>
         </section>
 
-        <aside className="lab-solution border border-line bg-surface">
-          <div className="border-b border-line px-3 py-2">
-            <h2 className="text-sm font-medium text-ink">Worked calculation</h2>
-            <p className="mt-0.5 text-[11px] text-quiet">
-              {model.isCaseStudy ? "Case study, with exact fractions." : "Same steps, with the numbers now on the sliders."}
+        <aside className="lab-solution">
+          <div className="px-1 pt-3 pb-1">
+            <h2 className="text-[15px] font-medium text-ink">Calculation</h2>
+            <p className="mt-1 text-[13px] leading-5 text-quiet">
+              {model.steps.length} steps. Open one to read the derivation and highlight it on the model.
             </p>
           </div>
-          <div className="px-3">
-            <ol className="step-list">
-              {model.steps.map((step) => (
-                <li key={step.id}>
-                  <h3>{step.title}</h3>
-                  {step.lines.map((line) => (
-                    <p key={line} className="step-math">
-                      {line}
-                    </p>
-                  ))}
-                  <p className="step-note">{step.note}</p>
+          <ol className="step-list">
+            {model.steps.map((step, index) => {
+              const open = openId === step.id;
+              return (
+                <li
+                  key={step.id}
+                  className={open ? "is-open" : undefined}
+                  style={{ "--step": STEP_COLOR[step.focus] } as CSSProperties}
+                >
+                  <button
+                    type="button"
+                    className="step-button"
+                    aria-expanded={open}
+                    onClick={() => openStep(step.id)}
+                  >
+                    <span className="step-index">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="step-heading">{step.title}</span>
+                    <span className="step-toggle">{open ? "Hide" : "Expand"}</span>
+                  </button>
+                  <div className="step-summary">
+                    {step.summary.map((line) => (
+                      <p key={line} className="step-math">
+                        <MathText text={line} />
+                      </p>
+                    ))}
+                  </div>
+                  {open ? (
+                    <div>
+                      {step.details.map((detail) => (
+                        <section key={detail.id} className="step-detail">
+                          <h3 className="text-[13px] font-medium text-ink">{detail.title}</h3>
+                          {detail.lines.map((line) => (
+                            <p key={line} className="step-math">
+                              <MathText text={line} />
+                            </p>
+                          ))}
+                          <p className="step-note">{detail.note}</p>
+                        </section>
+                      ))}
+                      {step.focus === "incidence" ? (
+                        <div className="step-detail">
+                          <h3 className="text-[13px] font-medium text-ink">North–up slice</h3>
+                          <div className="mt-2 bg-paper">
+                            <RoofSlice model={model} idPrefix="bench" />
+                          </div>
+                          <h3 className="mt-4 text-[13px] font-medium text-ink">Sun as a vector sum</h3>
+                          <div className="mt-2">
+                            <SunComponents model={model} />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : step.focus === "incidence" ? (
+                    <p className="step-aside">The slice diagram and the sun components are inside this step.</p>
+                  ) : null}
                 </li>
-              ))}
-            </ol>
-            <section className="border-b border-line py-3">
-              <h3 className="text-[13px] font-medium text-ink">North–up slice</h3>
-              <div className="mt-2 border border-line">
-                <RoofSlice model={model} idPrefix="bench" />
-              </div>
-            </section>
-            <section className="py-3 pb-4">
-              <h3 className="text-[13px] font-medium text-ink">Sun as a vector sum</h3>
-              <div className="mt-2">
-                <SunComponents model={model} />
-              </div>
-            </section>
-          </div>
+              );
+            })}
+          </ol>
         </aside>
       </main>
-    </div>
-  );
-}
-
-function Readout({ label, value, unit = "" }: { label: string; value: string; unit?: string }) {
-  return (
-    <div className="border-r border-line px-2 py-1 last:border-r-0">
-      <dt className="text-quiet">{label}</dt>
-      <dd className="truncate text-ink">
-        {value}
-        {unit ? ` ${unit}` : ""}
-      </dd>
     </div>
   );
 }

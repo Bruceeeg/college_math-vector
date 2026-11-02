@@ -1,3 +1,4 @@
+import { VECTOR_COLOR } from "@/lib/colors";
 import { formatQuantity, formatVec, type PanelModel, type Vec3 } from "@/lib/panel";
 
 function arrowPoints(x1: number, y1: number, x2: number, y2: number) {
@@ -78,25 +79,25 @@ export function RoofSlice({
         <text x={origin.x + 6} y={axisU + 4} fill="#475569" fontSize="11">
           up
         </text>
-        <line x1={origin.x} y1={origin.y} x2={edge.x} y2={edge.y} stroke="#0f766e" strokeWidth="3" />
-        <polygon points={arrowPoints(origin.x, origin.y, edge.x, edge.y)} fill="#0f766e" />
-        <text x={(origin.x + edge.x) / 2 + 8} y={(origin.y + edge.y) / 2 + 14} fill="#0f766e" fontSize="12">
+        <line x1={origin.x} y1={origin.y} x2={edge.x} y2={edge.y} stroke={VECTOR_COLOR.v} strokeWidth="3" />
+        <polygon points={arrowPoints(origin.x, origin.y, edge.x, edge.y)} fill={VECTOR_COLOR.v} />
+        <text x={(origin.x + edge.x) / 2 + 8} y={(origin.y + edge.y) / 2 + 14} fill={VECTOR_COLOR.v} fontSize="12">
           v
         </text>
         {normalPlane >= 1e-8 ? (
           <>
-            <line x1={mid.x} y1={mid.y} x2={nTip.x} y2={nTip.y} stroke="#a16207" strokeWidth="2" />
-            <polygon points={arrowPoints(mid.x, mid.y, nTip.x, nTip.y)} fill="#a16207" />
-            <text x={nTip.x + 6} y={nTip.y + 4} fill="#a16207" fontSize="12">
+            <line x1={mid.x} y1={mid.y} x2={nTip.x} y2={nTip.y} stroke={VECTOR_COLOR.n} strokeWidth="2" />
+            <polygon points={arrowPoints(mid.x, mid.y, nTip.x, nTip.y)} fill={VECTOR_COLOR.n} />
+            <text x={nTip.x + 6} y={nTip.y + 4} fill={VECTOR_COLOR.n} fontSize="12">
               n
             </text>
           </>
         ) : null}
         {sunPlane >= 1e-8 ? (
           <>
-            <line x1={mid.x} y1={mid.y} x2={sTip.x} y2={sTip.y} stroke="#c2410c" strokeWidth="2" />
-            <polygon points={arrowPoints(mid.x, mid.y, sTip.x, sTip.y)} fill="#c2410c" />
-            <text x={sTip.x + 6} y={sTip.y - 6} fill="#c2410c" fontSize="12">
+            <line x1={mid.x} y1={mid.y} x2={sTip.x} y2={sTip.y} stroke={VECTOR_COLOR.s} strokeWidth="2" />
+            <polygon points={arrowPoints(mid.x, mid.y, sTip.x, sTip.y)} fill={VECTOR_COLOR.s} />
+            <text x={sTip.x + 6} y={sTip.y - 6} fill={VECTOR_COLOR.s} fontSize="12">
               s
             </text>
           </>
@@ -114,9 +115,9 @@ export function RoofSlice({
 
 export function SunComponents({ model }: { model: PanelModel }) {
   const parts: { label: string; vector: Vec3; color: string }[] = [
-    { label: "east", vector: model.sEast, color: "#1e3a5f" },
-    { label: "north", vector: model.sNorth, color: "#0f766e" },
-    { label: "up", vector: model.sUp, color: "#a16207" },
+    { label: "east", vector: model.sEast, color: VECTOR_COLOR.s },
+    { label: "north", vector: model.sNorth, color: VECTOR_COLOR.s },
+    { label: "up", vector: model.sUp, color: VECTOR_COLOR.s },
   ];
   const max = Math.max(1, ...parts.map((part) => Math.abs(part.vector.x + part.vector.y + part.vector.z)));
 

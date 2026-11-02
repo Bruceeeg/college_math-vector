@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 function precisionFor(step: number) {
   const text = String(step);
@@ -19,27 +19,42 @@ function displayValue(value: number, step: number) {
 export function ParameterControl({
   id,
   label,
-  symbol,
+  hint,
   unit,
   value,
   min,
   max,
   step,
+  showRange,
   onChange,
 }: {
   id: string;
   label: string;
-  symbol: string;
+  hint: string;
   unit: string;
   value: number;
   min: number;
   max: number;
   step: number;
+  showRange: boolean;
   onChange: (value: number) => void;
 }) {
   const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null);
   const cancelBlur = useRef(false);
+  const committed = useRef(value);
   const draft = editing?.id === id ? editing.draft : displayValue(value, step);
+  const rangeId = `${id}-range`;
+
+  useEffect(() => {
+    if (value === committed.current) return;
+    committed.current = value;
+    setEditing((current) => (current?.id === id ? null : current));
+  }, [id, value]);
+
+  const publish = (next: number) => {
+    committed.current = next;
+    onChange(next);
+  };
 
   const commit = () => {
     if (cancelBlur.current) {
@@ -53,64 +68,66 @@ export function ParameterControl({
       return;
     }
     setEditing(null);
-    onChange(Math.min(max, Math.max(min, snapToStep(parsed, step))));
+    publish(Math.min(max, Math.max(min, snapToStep(parsed, step))));
   };
 
   return (
-    <div className="px-1 py-0.5">
-      <div className="grid grid-cols-[minmax(0,1fr)_72px_36px] items-center gap-1.5">
-        <label htmlFor={`${id}-number`} className="min-w-0 truncate text-[13px] text-quiet">
-          <span className="font-mono text-ink">{symbol}</span>
-          <span className="ml-1.5">{label}</span>
-        </label>
-        <input
-          id={`${id}-number`}
-          type="number"
-          step={step}
-          min={min}
-          max={max}
-          value={draft}
-          onFocus={() => {
-            cancelBlur.current = false;
-            setEditing({ id, draft: displayValue(value, step) });
-          }}
-          onChange={(event) => {
-            const nextDraft = event.target.value;
-            setEditing({ id, draft: nextDraft });
-            if (nextDraft.trim() === "" || nextDraft === "-") {
-              return;
-            }
-            const parsed = Number(nextDraft);
-            if (Number.isFinite(parsed)) {
-              onChange(Math.min(max, Math.max(min, snapToStep(parsed, step))));
-            }
-          }}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.currentTarget.blur();
-            }
-            if (event.key === "Escape") {
-              cancelBlur.current = true;
-              setEditing(null);
-              event.currentTarget.blur();
-            }
-          }}
-          className="h-8 min-w-0 border border-line bg-surface px-2 text-right font-mono text-[13px] text-ink tabular-nums outline-none focus:border-navy focus:ring-1 focus:ring-navy"
-        />
-        <span className="truncate font-mono text-[11px] text-quiet">{unit}</span>
+    <div className="param-row py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 pt-0.5">
+          <label htmlFor={`${id}-number`} className="block text-[13px] font-medium leading-5 text-ink">
+            {label}
+          </label>
+          <p className="mt-0.5 text-[11px] leading-4 text-quiet">{hint}</p>
+        </div>
+        <div className="flex shrink-0 items-baseline gap-1.5">
+          <input
+            id={`${id}-number`}
+            className="param-number h-10 w-[4.75rem] bg-white px-2 text-right font-mono text-lg text-ink tabular-nums outline-none focus:ring-1 focus:ring-navy"
+            type="number"
+            inputMode="decimal"
+            step={step}
+            min={min}
+            max={max}
+            value={draft}
+            onFocus={() => {
+              cancelBlur.current = false;
+              setEditing({ id, draft: displayValue(value, step) });
+            }}
+            onChange={(event) => {
+              const nextDraft = event.target.value;
+              setEditing({ id, draft: nextDraft });
+              if (nextDraft.trim() === "" || nextDraft === "-" || nextDraft === ".") return;
+              const parsed = Number(nextDraft);
+              if (Number.isFinite(parsed)) publish(Math.min(max, Math.max(min, snapToStep(parsed, step))));
+            }}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") {
+                cancelBlur.current = true;
+                setEditing(null);
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          <span className="w-4 font-mono text-[11px] text-quiet">{unit}</span>
+        </div>
       </div>
       <input
-        id={`${id}-range`}
+        id={rangeId}
+        className="param-slider mt-2 block w-full"
         type="range"
         min={min}
         max={max}
         step={step}
         value={value}
         aria-label={`${label} slider`}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="mt-2 block w-full"
+        onChange={(event) => publish(Number(event.target.value))}
       />
+      <p className={`param-meta ${showRange ? "is-visible" : ""}`}>
+        {min} to {max} {unit} · step {step}
+      </p>
     </div>
   );
 }
