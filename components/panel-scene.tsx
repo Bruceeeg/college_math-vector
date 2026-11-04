@@ -84,7 +84,7 @@ function useLabelLayout(registry: Map<string, RegisteredLabel>) {
       scratch.unproject(camera);
       point.item.sprite.position.copy(scratch);
     }
-  }, 1);
+  });
 }
 
 function Label({
